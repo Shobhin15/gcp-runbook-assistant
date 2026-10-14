@@ -1,0 +1,87 @@
+name: CI/CD
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements-dev.txt
+      - run: pytest -v
+
+  terraform:
+    name: Terraform fmt and validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+      - run: terraform -chdir=terraform fmt -check -recursive
+      - run: terraform -chdir=terraform init -backend=false
+      - run: terraform -chdir=terraform validate
+
+  container:
+    name: Build image and health check
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t runbook-assistant:ci .
+      - name: Start container and check /healthz
+        run: |
+          docker run -d --name app -p 8080:8080 runbook-assistant:ci
+          for i in $(seq 1 15); do
+            if curl -fsS http://localhost:8080/healthz | grep -q '"status":"ok"'; then
+              echo "Health check passed"; exit 0
+            fi
+            sleep 2
+          done
+          docker logs app; exit 1
+
+  deploy:
+    name: Deploy to Cloud Run (Workload Identity Federation)
+    runs-on: ubuntu-latest
+    needs: [test, terraform, container]
+    # Runs only on main, and only after the one-time GCP setup (see README)
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.GCP_PROJECT_ID != ''
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      REGION: ${{ vars.GCP_REGION || 'us-central1' }}
+      IMAGE: ${{ vars.GCP_REGION || 'us-central1' }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/runbook-assistant/app:${{ github.sha }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Authenticate to Google Cloud without keys
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_DEPLOYER_SA }}
+      - uses: google-github-actions/setup-gcloud@v2
+      - name: Build and push image
+        run: |
+          gcloud auth configure-docker "$REGION-docker.pkg.dev" --quiet
+          docker build -t "$IMAGE" .
+          docker push "$IMAGE"
+      - name: Deploy (private, capped at one instance)
+        run: |
+          gcloud run deploy runbook-assistant \
+            --image "$IMAGE" \
+            --region "$REGION" \
+            --service-account "${{ vars.GCP_RUNTIME_SA }}" \
+            --no-allow-unauthenticated \
+            --max-instances 1 \
+            --memory 512Mi \
+            --set-env-vars "GCP_PROJECT=${{ vars.GCP_PROJECT_ID }},GCP_LOCATION=$REGION" \
+            --quiet
