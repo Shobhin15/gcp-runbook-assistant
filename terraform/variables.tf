@@ -12,5 +12,5 @@ variable "region" {
 variable "github_repo" {
   description = "GitHub repository allowed to deploy, as owner/name"
   type        = string
-  default     = "shobhin15/gcp-runbook-assistant"
+  default     = "Shobhin15/gcp-runbook-assistant"
 }

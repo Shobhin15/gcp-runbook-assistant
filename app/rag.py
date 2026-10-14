@@ -96,7 +96,11 @@ def answer(question: str, index: RunbookIndex, generate: Generator, k: int = 3) 
             "sources": [],
         }
     text = generate(SYSTEM_PROMPT, build_prompt(question, hits))
+    # One entry per runbook, keeping its best-matching section's score
+    best: dict[str, float] = {}
+    for c, s in hits:
+        best[c.source] = max(s, best.get(c.source, 0.0))
     return {
         "answer": text,
-        "sources": [{"runbook": c.source, "score": round(s, 3)} for c, s in hits],
+        "sources": [{"runbook": name, "score": round(score, 3)} for name, score in best.items()],
     }

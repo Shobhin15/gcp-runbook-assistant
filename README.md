@@ -1,6 +1,6 @@
 # GCP Runbook Assistant (Gemini RAG on Cloud Run)
 
-![CI/CD](https://github.com/shobhin15/gcp-runbook-assistant/actions/workflows/ci-cd.yml/badge.svg)
+![CI/CD](https://github.com/Shobhin15/gcp-runbook-assistant/actions/workflows/ci-cd.yml/badge.svg)
 
 An on-call assistant that answers incident questions such as "the RabbitMQ queue keeps growing, what do I check?" using **only** the team's runbooks.
 
@@ -67,6 +67,8 @@ You need a Google Cloud project with billing enabled (new accounts get free tria
 
 ```bash
 gcloud auth application-default login
+# New projects: link billing, then turn on the API Terraform uses to manage other APIs
+gcloud services enable cloudresourcemanager.googleapis.com serviceusage.googleapis.com
 cd terraform
 cp terraform.tfvars.example terraform.tfvars   # set your project_id
 terraform init && terraform apply

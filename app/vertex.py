@@ -47,7 +47,9 @@ def make_generator():
             config=types.GenerateContentConfig(
                 system_instruction=system_prompt,
                 temperature=0.2,
-                max_output_tokens=800,
+                max_output_tokens=1024,
+                # Simple lookup task: skip "thinking" so the whole budget goes to the answer
+                thinking_config=types.ThinkingConfig(thinking_budget=0) if "2.5-flash" in GEMINI_MODEL else None,
             ),
         )
         return response.text or ""

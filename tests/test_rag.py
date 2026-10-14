@@ -76,3 +76,10 @@ def test_answer_rejects_bad_input():
         rag.answer("   ", index, lambda *_: "")
     with pytest.raises(ValueError):
         rag.answer("x" * 1001, index, lambda *_: "")
+
+
+def test_sources_are_listed_once_per_runbook():
+    index = rag.RunbookIndex(rag.load_runbooks(RUNBOOKS), fake_embed)
+    result = rag.answer("rabbitmq queue consumer backlog", index, lambda *_: "ok", k=3)
+    names = [s["runbook"] for s in result["sources"]]
+    assert len(names) == len(set(names))
