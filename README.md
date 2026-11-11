@@ -2,7 +2,7 @@
 
 ![CI/CD](https://github.com/Shobhin15/gcp-runbook-assistant/actions/workflows/ci-cd.yml/badge.svg)
 
-An on-call assistant that answers incident questions such as "the RabbitMQ queue keeps growing, what do I check?" using **only** the team's runbooks, plus an **agentic triage** endpoint where Gemini investigates an incident with read-only tools.
+An on-call assistant that answers incident questions such as "the RabbitMQ queue keeps growing, what do I check?" using **only** the team's runbooks, plus an **agentic triage** endpoint where Gemini investigates an incident with read-only tools, and an **MCP server** that gives any AI assistant those same tools.
 
 - It finds the relevant runbook sections with **Vertex AI embeddings and vector search**.
 - It asks **Gemini** to answer from those sections alone, and cites which runbook each step came from.
@@ -91,6 +91,52 @@ Gemini chose three tools on its own: it searched the runbooks, checked the servi
 ```
 
 ![Live /triage call from Cloud Shell](docs/triage-live-example.png)
+
+## MCP server: use the tools from any AI assistant
+
+The same three read-only tools are also published as a [Model Context Protocol](https://modelcontextprotocol.io) server (`app/mcp_server.py`). Any MCP client (Claude Desktop, Cursor, VS Code, or the MCP Inspector) can then search the runbooks, read a service's recent errors, and check its rollout status during an incident, without opening the Google Cloud console.
+
+| MCP tool | What it reads |
+|---|---|
+| `search_runbooks(query)` | Best-matching runbook sections |
+| `recent_error_logs(service, minutes=30)` | Up to 20 ERROR logs for a Cloud Run service |
+| `cloud_run_status(service)` | Readiness, latest ready vs latest created revision, traffic split |
+
+Every MCP call goes through the same guardrails as `/triage`: arguments are validated, service names are checked (and limited by `TRIAGE_SERVICES` if set), output is truncated, and nothing can change a resource. Tests: `tests/test_mcp_server.py`.
+
+**Run it locally (stdio):**
+
+```bash
+pip install -r requirements.txt -r requirements-mcp.txt
+gcloud auth application-default login
+GCP_PROJECT=your-project-id GCP_LOCATION=us-central1 python -m app.mcp_server
+```
+
+**Try it in the MCP Inspector:**
+
+```bash
+GCP_PROJECT=your-project-id npx @modelcontextprotocol/inspector .venv/bin/python -m app.mcp_server
+```
+
+**Add it to Claude Desktop** (`claude_desktop_config.json`), using absolute paths:
+
+```json
+{
+  "mcpServers": {
+    "runbook-assistant": {
+      "command": "/path/to/gcp-runbook-assistant/.venv/bin/python",
+      "args": ["-m", "app.mcp_server"],
+      "env": {
+        "PYTHONPATH": "/path/to/gcp-runbook-assistant",
+        "GCP_PROJECT": "your-project-id",
+        "GCP_LOCATION": "us-central1"
+      }
+    }
+  }
+}
+```
+
+The server runs on your machine with your own Google Cloud credentials, so it can only read what you can read.
 
 ## AI guardrails and governance
 
@@ -188,6 +234,7 @@ Clean up with `terraform destroy`, plus `gcloud run services delete runbook-assi
 │   ├── vertex.py     # Vertex AI embedder, Gemini generator, Gemini function-calling adapter
 │   ├── agent.py      # agent loop with guardrails (no cloud SDK)
 │   ├── tools.py      # read-only tools: runbooks, Cloud Logging, Cloud Run status
+│   ├── mcp_server.py # the same tools as an MCP server (stdio)
 │   └── main.py       # FastAPI: /healthz, /ask, /triage
 ├── docs/             # screenshots of live runs
 ├── runbooks/         # sample on-call runbooks (Markdown)
