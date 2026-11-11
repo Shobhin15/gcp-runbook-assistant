@@ -76,3 +76,15 @@ def test_fastmcp_server_registers_the_three_tools():
     server = mcp_server.build_server()
     names = {t.name for t in asyncio.run(server.list_tools())}
     assert names == {"search_runbooks", "recent_error_logs", "cloud_run_status"}
+
+
+def test_every_mcp_tool_is_marked_read_only():
+    pytest.importorskip("mcp")
+    import asyncio
+
+    def hint(annotations, snake, camel):  # mcp 2.x uses snake_case attributes, 1.x camelCase
+        return getattr(annotations, snake, None) if hasattr(annotations, snake) else getattr(annotations, camel)
+
+    for tool in asyncio.run(mcp_server.build_server().list_tools()):
+        assert hint(tool.annotations, "read_only_hint", "readOnlyHint") is True
+        assert hint(tool.annotations, "destructive_hint", "destructiveHint") is False

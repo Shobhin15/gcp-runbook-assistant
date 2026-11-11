@@ -2,7 +2,8 @@
 
 Run it locally over stdio, for example from Claude Desktop, Cursor, or the MCP
 Inspector, so an assistant you already use can search the runbooks, read a
-Cloud Run service's recent errors, and check its rollout status:
+Cloud Run service's recent errors, and check its rollout status. Each tool is
+marked read-only (readOnlyHint) so clients know it changes nothing:
 
     pip install -r requirements.txt -r requirements-mcp.txt
     GCP_PROJECT=your-project GCP_LOCATION=us-central1 python -m app.mcp_server
@@ -50,21 +51,26 @@ def _handlers() -> dict[str, Callable[..., dict]]:
 
 
 def build_server():
-    from mcp.server.fastmcp import FastMCP
+    try:
+        from mcp.server.mcpserver import MCPServer as Server  # mcp 2.x
+    except ImportError:
+        from mcp.server.fastmcp import FastMCP as Server      # mcp 1.x
+    from mcp.types import ToolAnnotations
 
-    server = FastMCP(SERVER_NAME)
+    server = Server(SERVER_NAME)
+    read_only = ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True)
 
-    @server.tool()
+    @server.tool(annotations=read_only)
     def search_runbooks(query: str) -> dict:
         """Search the team's on-call runbooks. Returns the best-matching sections with their runbook names."""
         return _handlers()["search_runbooks"](query=query)
 
-    @server.tool()
+    @server.tool(annotations=read_only)
     def recent_error_logs(service: str, minutes: int = 30) -> dict:
         """Read the most recent ERROR logs (max 20) for a Cloud Run service over the last 5 to 120 minutes."""
         return _handlers()["recent_error_logs"](service=service, minutes=minutes)
 
-    @server.tool()
+    @server.tool(annotations=read_only)
     def cloud_run_status(service: str) -> dict:
         """Get a Cloud Run service's readiness, latest ready vs latest created revision, and traffic split."""
         return _handlers()["cloud_run_status"](service=service)
