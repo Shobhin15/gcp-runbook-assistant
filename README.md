@@ -65,6 +65,33 @@ curl -s -X POST "$URL/triage" \
   -d '{"incident": "orders service returning 503s since the last deploy"}'
 ```
 
+### Live example
+
+Run against the deployed service on Cloud Run, with a vague incident report:
+
+```bash
+curl -s -X POST "$URL/triage" \
+  -H "Authorization: Bearer $(gcloud auth print-identity-token)" \
+  -H "Content-Type: application/json" \
+  -d '{"incident": "runbook-assistant returning errors after the last deploy"}' | python3 -m json.tool
+```
+
+Gemini chose three tools on its own: it searched the runbooks, checked the service's revisions and traffic, and read the last 30 minutes of error logs. The newest revision was ready, serving 100% of traffic, with no errors, so instead of inventing a fix it recommended escalating to a human.
+
+```json
+{
+  "answer": "The runbook-assistant service is currently healthy and its latest created revision, `runbook-assistant-00005-dns`, is also the latest ready revision and is serving 100% of the traffic. There are no recent error logs for the service.\n\nProposed next step: Escalate to a human to investigate further, as the provided information does not indicate any issues with the service.",
+  "steps": [
+    {"tool": "search_runbooks", "args": {"query": "runbook-assistant errors"}, "status": "ok"},
+    {"tool": "cloud_run_status", "args": {"service": "runbook-assistant"}, "status": "ok"},
+    {"tool": "recent_error_logs", "args": {"service": "runbook-assistant"}, "status": "ok"}
+  ],
+  "sources": ["failed-deployment", "pod-crashloopbackoff"]
+}
+```
+
+![Live /triage call from Cloud Shell](docs/triage-live-example.png)
+
 ## AI guardrails and governance
 
 | Concern | How it's handled |
@@ -162,6 +189,7 @@ Clean up with `terraform destroy`, plus `gcloud run services delete runbook-assi
 │   ├── agent.py      # agent loop with guardrails (no cloud SDK)
 │   ├── tools.py      # read-only tools: runbooks, Cloud Logging, Cloud Run status
 │   └── main.py       # FastAPI: /healthz, /ask, /triage
+├── docs/             # screenshots of live runs
 ├── runbooks/         # sample on-call runbooks (Markdown)
 ├── tests/            # pytest, fully offline
 ├── terraform/        # APIs, Artifact Registry, service accounts, Workload Identity Federation
