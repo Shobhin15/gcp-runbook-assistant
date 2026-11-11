@@ -39,7 +39,7 @@ resource "google_artifact_registry_repository" "images" {
   depends_on    = [google_project_service.apis]
 }
 
-# Identity the Cloud Run service runs as: it can call Vertex AI and nothing else
+# Identity the Cloud Run service runs as: it can call Vertex AI and read logs and service status
 resource "google_service_account" "runtime" {
   account_id   = "runbook-assistant-run"
   display_name = "Runbook assistant (Cloud Run runtime)"
@@ -50,6 +50,14 @@ resource "google_project_iam_member" "runtime_vertex" {
   project = var.project_id
   role    = "roles/aiplatform.user"
   member  = "serviceAccount:${google_service_account.runtime.email}"
+}
+
+# Read-only access for the /triage agent's tools: it can read logs and service status, never change them
+resource "google_project_iam_member" "runtime_read_only" {
+  for_each = toset(["roles/logging.viewer", "roles/run.viewer"])
+  project  = var.project_id
+  role     = each.value
+  member   = "serviceAccount:${google_service_account.runtime.email}"
 }
 
 # Identity GitHub Actions deploys as

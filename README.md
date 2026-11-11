@@ -2,7 +2,7 @@
 
 ![CI/CD](https://github.com/Shobhin15/gcp-runbook-assistant/actions/workflows/ci-cd.yml/badge.svg)
 
-An on-call assistant that answers incident questions such as "the RabbitMQ queue keeps growing, what do I check?" using **only** the team's runbooks.
+An on-call assistant that answers incident questions such as "the RabbitMQ queue keeps growing, what do I check?" using **only** the team's runbooks, plus an **agentic triage** endpoint where Gemini investigates an incident with read-only tools.
 
 - It finds the relevant runbook sections with **Vertex AI embeddings and vector search**.
 - It asks **Gemini** to answer from those sections alone, and cites which runbook each step came from.
@@ -29,6 +29,42 @@ flowchart LR
 3. Gemini gets a strict system prompt plus only those excerpts: answer only from the runbooks, cite the runbook name for each step, never invent commands or credentials, and say "escalate" when unsure.
 4. **If nothing relevant is found, Gemini is never called.** The API returns an escalation message instead of guessing.
 
+## Agentic triage (`POST /triage`)
+
+`/ask` answers from runbooks. `/triage` goes further: Gemini decides which **read-only tools** to call, looks at the evidence, and proposes a next step for a human to approve.
+
+| Tool | What it reads |
+|---|---|
+| `search_runbooks` | The team's runbooks (same vector index as `/ask`) |
+| `recent_error_logs` | The last 5 to 120 minutes of ERROR logs for a Cloud Run service (Cloud Logging) |
+| `cloud_run_status` | A Cloud Run service's readiness, latest ready vs latest created revision, and traffic split |
+
+```mermaid
+flowchart LR
+    I[Incident text] --> A[Agent loop<br/>app/agent.py]
+    A <-->|function calling| G[Gemini]
+    A -->|allow-listed, validated| T1[search_runbooks]
+    A --> T2[recent_error_logs]
+    A --> T3[cloud_run_status]
+    A -->|answer + every tool call + cited runbooks| E[Engineer approves next step]
+```
+
+Guardrails, all tested offline in `tests/test_agent.py`:
+
+- **Read-only by design:** the tools can only read, and the runtime service account only has `roles/logging.viewer` and `roles/run.viewer` on top of Vertex AI. The agent proposes; a human acts.
+- **Allow-listed tools:** a call to any tool not on the list (say, `restart_service`) is rejected, not run.
+- **Validated arguments:** unknown or missing arguments are refused, and service names must match a strict pattern, so the model can't inject into the log filter. Set `TRIAGE_SERVICES=orders,payments` to limit which services it may inspect.
+- **Step budget:** at most 5 tool calls per incident. After that, tools are withdrawn and the model must answer.
+- **Prompt-injection defense:** tool output is truncated and passed back as data, and the system prompt tells Gemini to ignore instructions found inside it.
+- **Full trace:** the response lists every tool call with its arguments and status, and the request logs one structured line with the same.
+
+```bash
+curl -s -X POST "$URL/triage" \
+  -H "Authorization: Bearer $(gcloud auth print-identity-token)" \
+  -H "Content-Type: application/json" \
+  -d '{"incident": "orders service returning 503s since the last deploy"}'
+```
+
 ## AI guardrails and governance
 
 | Concern | How it's handled |
@@ -36,7 +72,7 @@ flowchart LR
 | Hallucination | Answers are grounded only in retrieved excerpts, low temperature (0.2), and no model call without context |
 | Traceability | Every answer returns the runbooks it used, with similarity scores |
 | Access | Cloud Run is private (`--no-allow-unauthenticated`); callers need IAM `run.invoker` |
-| Least privilege | The runtime service account only has `roles/aiplatform.user` |
+| Least privilege | The runtime service account has `roles/aiplatform.user`, plus read-only `roles/logging.viewer` and `roles/run.viewer` for the triage tools |
 | Cost and abuse | Max 1 instance, 1,000-character question limit, capped output tokens |
 | Observability | One structured JSON log line per request (latency, sources, answered or not), searchable in Cloud Logging |
 
@@ -122,8 +158,10 @@ Clean up with `terraform destroy`, plus `gcloud run services delete runbook-assi
 .
 ├── app/
 │   ├── rag.py        # chunking, embeddings index, cosine search, grounded prompt (no cloud SDK)
-│   ├── vertex.py     # Vertex AI embedder and Gemini generator
-│   └── main.py       # FastAPI: /healthz, /ask
+│   ├── vertex.py     # Vertex AI embedder, Gemini generator, Gemini function-calling adapter
+│   ├── agent.py      # agent loop with guardrails (no cloud SDK)
+│   ├── tools.py      # read-only tools: runbooks, Cloud Logging, Cloud Run status
+│   └── main.py       # FastAPI: /healthz, /ask, /triage
 ├── runbooks/         # sample on-call runbooks (Markdown)
 ├── tests/            # pytest, fully offline
 ├── terraform/        # APIs, Artifact Registry, service accounts, Workload Identity Federation
